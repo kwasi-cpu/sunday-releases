@@ -6,6 +6,10 @@ on:
       tag:
         description: "Release tag to mirror (e.g., v1.0.0)"
         required: true
+      source_repo:
+        description: "Source repository (owner/name) to pull assets from"
+        required: false
+        default: kwasi-cpu/sundaygcp
 
 jobs:
   mirror:
@@ -33,12 +37,13 @@ jobs:
         run: |
           set -euxo pipefail
           TAG="${{ github.event.inputs.tag }}"
+          SRC="${{ github.event.inputs.source_repo }}"
           mkdir -p artifacts
-          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64.dmg" --clobber
-          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64-mac.zip" --clobber
-          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64.dmg.blockmap" --clobber
-          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64-mac.zip.blockmap" --clobber
-          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "latest-mac.yml" --clobber
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-arm64.dmg" --clobber
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-arm64-mac.zip" --clobber
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-arm64.dmg.blockmap" --clobber
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-arm64-mac.zip.blockmap" --clobber
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "latest-mac.yml" --clobber
 
       - name: Ensure target release exists
         shell: bash
