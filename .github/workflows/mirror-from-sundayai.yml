@@ -1,0 +1,65 @@
+name: Mirror SundayAI assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to mirror (e.g., v1.0.0)"
+        required: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure gh auth
+        shell: bash
+        env:
+          RELEASES_UPLOAD_TOKEN: ${{ secrets.RELEASES_UPLOAD_TOKEN }}
+        run: |
+          set -euxo pipefail
+          if [[ -z "${RELEASES_UPLOAD_TOKEN:-}" ]]; then
+            echo "RELEASES_UPLOAD_TOKEN is required (a PAT with repo scope to read kwasi-cpu/SundayAI)." >&2
+            exit 1
+          fi
+          echo "GH_TOKEN=$RELEASES_UPLOAD_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Download assets from kwasi-cpu/SundayAI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${{ github.event.inputs.tag }}"
+          mkdir -p artifacts
+          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64.dmg" --clobber
+          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64-mac.zip" --clobber
+          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64.dmg.blockmap" --clobber
+          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "Sunday-*-arm64-mac.zip.blockmap" --clobber
+          gh release download "$TAG" --repo kwasi-cpu/SundayAI -D artifacts --pattern "latest-mac.yml" --clobber
+
+      - name: Ensure target release exists
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${{ github.event.inputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists."
+          else
+            gh release create "$TAG" --title "SundayAI $TAG" --notes "Installers and update assets"
+          fi
+
+      - name: Upload assets to sunday-releases
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${{ github.event.inputs.tag }}"
+          shopt -s nullglob
+          files=(artifacts/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No files to upload" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
