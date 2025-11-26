@@ -1,0 +1,71 @@
+name: Mirror Sunday assets (x64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to mirror (e.g., v1.0.0)"
+        required: true
+      source_repo:
+        description: "Source repository (owner/name) to pull assets from"
+        required: false
+        default: kwasi-cpu/sundaygcp
+
+jobs:
+  mirror-x64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure gh auth
+        shell: bash
+        env:
+          RELEASES_UPLOAD_TOKEN: ${{ secrets.RELEASES_UPLOAD_TOKEN }}
+        run: |
+          set -euxo pipefail
+          if [[ -z "${RELEASES_UPLOAD_TOKEN:-}" ]]; then
+            echo "RELEASES_UPLOAD_TOKEN is required (a PAT with repo scope to read kwasi-cpu/sundaygcp)." >&2
+            exit 1
+          fi
+          echo "GH_TOKEN=$RELEASES_UPLOAD_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Download x64 assets from source repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${{ github.event.inputs.tag }}"
+          SRC="${{ github.event.inputs.source_repo }}"
+          mkdir -p artifacts
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-x64.dmg" --clobber || true
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-x64-mac.zip" --clobber || true
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "*.blockmap" --clobber || true
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "latest-mac.yml" --clobber || true
+          if [[ -f artifacts/latest-mac.yml ]]; then mv artifacts/latest-mac.yml artifacts/latest-mac-x64.yml; fi
+          ls -l artifacts || true
+
+      - name: Ensure target release exists
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${{ github.event.inputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists."
+          else
+            gh release create "$TAG" --title "Sunday $TAG" --notes "Installers and update assets (x64)"
+          fi
+
+      - name: Upload x64 assets to sunday-releases
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TAG="${{ github.event.inputs.tag }}"
+          shopt -s nullglob
+          files=(artifacts/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No files to upload" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
