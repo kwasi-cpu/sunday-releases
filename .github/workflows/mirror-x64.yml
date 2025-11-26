@@ -39,10 +39,17 @@ jobs:
           TAG="${{ github.event.inputs.tag }}"
           SRC="${{ github.event.inputs.source_repo }}"
           mkdir -p artifacts
+          # Try x64-specific patterns first
           gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-x64.dmg" --clobber || true
           gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-x64-mac.zip" --clobber || true
+          # Also try generic patterns used by electron-builder for x64
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*.dmg" --clobber || true
+          gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "Sunday-*-mac.zip" --clobber || true
           gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "*.blockmap" --clobber || true
           gh release download "$TAG" --repo "$SRC" -D artifacts --pattern "latest-mac.yml" --clobber || true
+          # Remove any arm64 files to keep this mirror x64-only
+          shopt -s nullglob
+          rm -f artifacts/*arm64* || true
           if [[ -f artifacts/latest-mac.yml ]]; then mv artifacts/latest-mac.yml artifacts/latest-mac-x64.yml; fi
           ls -l artifacts || true
 
