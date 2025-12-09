@@ -1,0 +1,122 @@
+name: Mirror Sunday artifacts from CI (no rebuild)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Target release tag in this repo (e.g., v1.1.0)"
+        required: true
+      source_repo:
+        description: "Source repo owner/name to pull artifacts from"
+        required: false
+        default: kwasi-cpu/sundaygcp
+      arm64_workflow:
+        description: "Workflow file for arm64 builds in source repo"
+        required: false
+        default: .github/workflows/release.yml
+      x64_workflow:
+        description: "Workflow file for x64 builds in source repo"
+        required: false
+        default: .github/workflows/release-mac-x64.yml
+      allow_missing_x64:
+        description: "Do not fail if x64 artifacts are missing"
+        required: false
+        default: 'true'
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure gh auth (RELEASES_UPLOAD_TOKEN)
+        shell: bash
+        env:
+          RELEASES_UPLOAD_TOKEN: ${{ secrets.RELEASES_UPLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASES_UPLOAD_TOKEN:-}" ]]; then
+            echo "RELEASES_UPLOAD_TOKEN is required (PAT with repo scope to read source repo and write here)." >&2
+            exit 1
+          fi
+          echo "GH_TOKEN=$RELEASES_UPLOAD_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Resolve latest successful run ids (arm64/x64)
+        id: runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=${{ github.event.inputs.source_repo }}
+          WF_ARM=${{ github.event.inputs.arm64_workflow }}
+          WF_X64=${{ github.event.inputs.x64_workflow }}
+          # Latest successful arm64 run id
+          ARM_RUN_ID=$(gh run list -R "$SRC" --workflow "$WF_ARM" --json databaseId,conclusion,updatedAt \
+            | jq -r 'map(select(.conclusion=="success")) | sort_by(.updatedAt) | last // {} | .databaseId // empty')
+          if [[ -z "$ARM_RUN_ID" ]]; then
+            echo "No successful runs found for $WF_ARM in $SRC" >&2
+            exit 1
+          fi
+          # Latest successful x64 run id (optional)
+          X64_RUN_ID=$(gh run list -R "$SRC" --workflow "$WF_X64" --json databaseId,conclusion,updatedAt \
+            | jq -r 'map(select(.conclusion=="success")) | sort_by(.updatedAt) | last // {} | .databaseId // empty') || true
+          echo "arm_run_id=$ARM_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "x64_run_id=$X64_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download arm64 artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=${{ github.event.inputs.source_repo }}
+          RUN=${{ steps.runs.outputs.arm_run_id }}
+          mkdir -p artifacts/arm64
+          gh run download -R "$SRC" "$RUN" -n sunday-mac-arm64 -D artifacts/arm64
+          ls -l artifacts/arm64 || true
+
+      - name: Download x64 artifacts (optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=${{ github.event.inputs.source_repo }}
+          RUN=${{ steps.runs.outputs.x64_run_id }}
+          mkdir -p artifacts/x64
+          if [[ -n "$RUN" ]]; then
+            gh run download -R "$SRC" "$RUN" -n sunday-mac-x64 -D artifacts/x64 || true
+          fi
+          # Rename x64 update YAML to avoid colliding with arm64
+          if [[ -f artifacts/x64/latest-mac.yml ]]; then
+            mv artifacts/x64/latest-mac.yml artifacts/x64/latest-mac-x64.yml
+          fi
+          ls -l artifacts/x64 || true
+
+      - name: Ensure target release exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=${{ github.event.inputs.tag }}
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists."
+          else
+            gh release create "$TAG" --title "Sunday $TAG" --notes "Installers and update assets mirrored from CI"
+          fi
+
+      - name: Upload artifacts to release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=${{ github.event.inputs.tag }}
+          shopt -s nullglob
+          files=(artifacts/arm64/* artifacts/x64/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No files to upload" >&2
+            exit 1
+          fi
+          if [[ ! -d artifacts/x64 ]] || [[ -z "$(ls -A artifacts/x64 2>/dev/null || true)" ]]; then
+            if [[ "${{ github.event.inputs.allow_missing_x64 }}" != "true" ]]; then
+              echo "x64 artifacts missing and allow_missing_x64=false" >&2
+              exit 1
+            fi
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
